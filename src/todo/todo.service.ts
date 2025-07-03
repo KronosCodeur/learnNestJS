@@ -1,70 +1,92 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, FindOptionsWhere, Like } from 'typeorm';
 import { CreateTodoDto } from './dto/create-todo.dto';
 import { UpdateTodoDto } from './dto/update-todo.dto';
+import { QueryTodoDto } from './dto/query-todo.dto';
 import { Todo } from './entities/todo.entity';
+import { User } from '../users/entities/user.entity';
+import { PaginationResult } from '../common/interfaces/pagination.interface';
 
 @Injectable()
 export class TodoService {
-    private todos: Todo[] = [];
-    private currentId = 1;
+    constructor(
+        @InjectRepository(Todo)
+        private todoRepository: Repository<Todo>,
+    ) {}
 
-    create(createTodoDto: CreateTodoDto): Todo {
-        const todo = new Todo({
-            id: this.currentId++,
+    async create(createTodoDto: CreateTodoDto, user: User): Promise<Todo> {
+        const todo = this.todoRepository.create({
             ...createTodoDto,
-            completed: createTodoDto.completed || false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            user,
+        });
+        return this.todoRepository.save(todo);
+    }
+
+    async findAll(queryDto: QueryTodoDto, user: User): Promise<PaginationResult<Todo>> {
+        const { page = 1, limit = 10, search, completed } = queryDto;
+        const skip = (page - 1) * limit;
+
+        const where: FindOptionsWhere<Todo> = { user: { id: user.id } };
+
+        if (search) {
+            where.title = Like(`%${search}%`);
+        }
+
+        if (completed !== undefined) {
+            where.completed = completed;
+        }
+
+        const [todos, total] = await this.todoRepository.findAndCount({
+            where,
+            skip,
+            take: limit,
+            order: { createdAt: 'DESC' },
         });
 
-        this.todos.push(todo);
-        return todo;
+        const totalPages = Math.ceil(total / limit);
+
+        return {
+            data: todos,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages,
+                hasNextPage: page < totalPages,
+                hasPreviousPage: page > 1,
+            },
+        };
     }
 
-    findAll(): Todo[] {
-        return this.todos;
-    }
+    async findOne(id: number, user: User): Promise<Todo> {
+        const todo = await this.todoRepository.findOne({
+            where: { id, user: { id: user.id } },
+        });
 
-    findOne(id: number): Todo {
-        const todo = this.todos.find(todo => todo.id === id);
         if (!todo) {
             throw new NotFoundException(`Todo with ID ${id} not found`);
         }
+
         return todo;
     }
 
-    update(id: number, updateTodoDto: UpdateTodoDto): Todo {
-        const todoIndex = this.todos.findIndex(todo => todo.id === id);
-        if (todoIndex === -1) {
-            throw new NotFoundException(`Todo with ID ${id} not found`);
-        }
-
-        this.todos[todoIndex] = {
-            ...this.todos[todoIndex],
-            ...updateTodoDto,
-            updatedAt: new Date(),
-        };
-
-        return this.todos[todoIndex];
+    async update(id: number, updateTodoDto: UpdateTodoDto, user: User): Promise<Todo> {
+        const todo = await this.findOne(id, user);
+        Object.assign(todo, updateTodoDto);
+        return this.todoRepository.save(todo);
     }
 
-    remove(id: number): void {
-        const todoIndex = this.todos.findIndex(todo => todo.id === id);
-        if (todoIndex === -1) {
-            throw new NotFoundException(`Todo with ID ${id} not found`);
-        }
-
-        this.todos.splice(todoIndex, 1);
+    async remove(id: number, user: User): Promise<void> {
+        const todo = await this.findOne(id, user);
+        await this.todoRepository.remove(todo);
     }
 
-    // Méthodes utilitaires supplémentaires
-    findByStatus(completed: boolean): Todo[] {
-        return this.todos.filter(todo => todo.completed === completed);
-    }
-
-    getStats() {
-        const total = this.todos.length;
-        const completed = this.todos.filter(todo => todo.completed).length;
+    async getStats(user: User) {
+        const total = await this.todoRepository.count({ where: { user: { id: user.id } } });
+        const completed = await this.todoRepository.count({
+            where: { user: { id: user.id }, completed: true },
+        });
         const pending = total - completed;
 
         return {
