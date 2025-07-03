@@ -11,12 +11,16 @@ import {AppService} from "./app.service";
 @Module({
     imports: [
         ConfigModule.forRoot({
-            isGlobal: true,
+            isGlobal: true,envFilePath:[
+                '.env',
+                '.env.development',
+            ]
         }),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],
             useFactory: getDatabaseConfig,
             inject: [ConfigService],
+
         }),
         AuthModule,
         UsersModule,
